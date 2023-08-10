@@ -87,15 +87,24 @@ func getChecksum(data []byte) uint32 {
 }
 
 func getOptionalHeader(pe *peparser.File) ([]byte, uint32) {
-	oh64 := peparser.ImageOptionalHeader64{}
 	ntHeaderOffset := pe.DOSHeader.AddressOfNewEXEHeader
 	fileHeaderSize := uint32(binary.Size(pe.NtHeader.FileHeader))
 	optHeaderOffset := ntHeaderOffset + (fileHeaderSize + 4)
-	size := uint32(binary.Size(oh64))
+	size := uint32(binary.Size(peparser.ImageOptionalHeader64{}))
+	if pe.Is32 {
+		size = uint32(binary.Size(peparser.ImageOptionalHeader32{}))
+	}
 	dataOri, _ := pe.ReadBytesAtOffset(optHeaderOffset, size)
 	data := make([]byte, size)
 	copy(data, dataOri)
 	return data, optHeaderOffset
+}
+
+func getExportDirectory(pe *peparser.File) peparser.DataDirectory {
+	if pe.Is32 {
+		return pe.NtHeader.OptionalHeader.(peparser.ImageOptionalHeader32).DataDirectory[peparser.ImageDirectoryEntryExport]
+	}
+	return pe.NtHeader.OptionalHeader.(peparser.ImageOptionalHeader64).DataDirectory[peparser.ImageDirectoryEntryExport]
 }
 
 // 删除指定的导出函数
@@ -127,8 +136,7 @@ func delExportFunc(delFuncName string, srcfilename string, dstfilename string) {
 
 	dataOptHeader, dataOptHeaderOffset := getOptionalHeader(pe)
 
-	oh64 := pe.NtHeader.OptionalHeader.(peparser.ImageOptionalHeader64)
-	dirExport := oh64.DataDirectory[peparser.ImageDirectoryEntryExport]
+	dirExport := getExportDirectory(pe)
 	dataExportOri, err := pe.GetData(dirExport.VirtualAddress, dirExport.Size)
 	if err != nil {
 		log.Fatalf("Error while get export data from file: %s, reason: %v", srcfilename, err)
@@ -265,8 +273,7 @@ func modExportFunc(srcFuncName string, dstFuncName string, srcfilename string, d
 
 	dataOptHeader, dataOptHeaderOffset := getOptionalHeader(pe)
 
-	oh64 := pe.NtHeader.OptionalHeader.(peparser.ImageOptionalHeader64)
-	dirExport := oh64.DataDirectory[peparser.ImageDirectoryEntryExport]
+	dirExport := getExportDirectory(pe)
 	dataExportOri, err := pe.GetData(dirExport.VirtualAddress, dirExport.Size)
 	if err != nil {
 		log.Fatalf("Error while get export data from file: %s, reason: %v", srcfilename, err)
@@ -390,8 +397,7 @@ func modExportName(dstExportName string, srcfilename string, dstfilename string)
 
 	dataOptHeader, dataOptHeaderOffset := getOptionalHeader(pe)
 
-	oh64 := pe.NtHeader.OptionalHeader.(peparser.ImageOptionalHeader64)
-	dirExport := oh64.DataDirectory[peparser.ImageDirectoryEntryExport]
+	dirExport := getExportDirectory(pe)
 	dataExportOri, err := pe.GetData(dirExport.VirtualAddress, dirExport.Size)
 	if err != nil {
 		log.Fatalf("Error while get export data from file: %s, reason: %v", srcfilename, err)
