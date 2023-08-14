@@ -7,10 +7,25 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"sort"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	peparser "github.com/saferwall/pe"
 )
+
+type bytesArray [][]byte
+
+func (p bytesArray) Len() int {
+	return len(p)
+}
+
+func (p bytesArray) Less(i, j int) bool {
+	return bytes.Compare(p[i], p[j]) == -1
+}
+
+func (p bytesArray) Swap(i, j int) {
+	p[i], p[j] = p[j], p[i]
+}
 
 func ReadInteger[V uint64 | uint32 | uint16](data []byte, offset int) V {
 	var value V
@@ -299,24 +314,39 @@ func modExportFunc(srcFuncName string, dstFuncName string, srcfilename string, d
 
 	// 构造新的 dll名 + 函数名表
 	nameArray := bytes.Split(nameTable, []byte("\x00"))
-	nameTableNew := make([]byte, 0)
-	nameOffsetMap := make(map[string]uint32, 0)
-	nameOffset := uint32(0)
-	for _, name := range nameArray {
+	nameArraySort := make([][]byte, 0)
+	for i, name := range nameArray {
 		if bytes.Equal(name, []byte("")) {
 			continue
 		}
-		if bytes.Equal(name, []byte(srcFuncName)) {
-			nameTableNew = append(nameTableNew, []byte(dstFuncName)...)
-			nameTableNew = append(nameTableNew, []byte("\x00")...)
-			nameOffsetMap[string(name)] = nameOffset
-			nameOffset += uint32(len(dstFuncName) + 1)
-		} else {
-			nameTableNew = append(nameTableNew, name...)
-			nameTableNew = append(nameTableNew, []byte("\x00")...)
-			nameOffsetMap[string(name)] = nameOffset
-			nameOffset += uint32(len(name) + 1)
+		if i == 0 {
+			continue
 		}
+		if bytes.Equal(name, []byte(srcFuncName)) {
+			nameArraySort = append(nameArraySort, []byte(dstFuncName))
+		} else {
+			nameArraySort = append(nameArraySort, name)
+		}
+	}
+	sort.Sort(bytesArray(nameArraySort))
+
+	nameTableNew := make([]byte, 0)
+	nameOffsetMap := make(map[string]uint32, 0)
+	nameOffset := uint32(0)
+
+	// dll name
+	nameTableNew = append(nameTableNew, nameArray[0]...)
+	nameTableNew = append(nameTableNew, []byte("\x00")...)
+	nameOffset += uint32(len(nameArray[0]) + 1)
+	// func name
+	for _, name := range nameArraySort {
+		nameTableNew = append(nameTableNew, name...)
+		nameTableNew = append(nameTableNew, []byte("\x00")...)
+		if bytes.Equal(name, []byte(dstFuncName)) {
+			nameOffsetMap[srcFuncName] = nameOffset
+		}
+		nameOffsetMap[string(name)] = nameOffset
+		nameOffset += uint32(len(name) + 1)
 	}
 	paddingLen := len(nameTable) - len(nameTableNew)
 	for i := 0; i < paddingLen; i++ {
@@ -325,6 +355,7 @@ func modExportFunc(srcFuncName string, dstFuncName string, srcfilename string, d
 
 	srcFuncIndex := -1
 	sortedFunctions := make(map[int]peparser.ExportFunction, 0)
+	mapFunctions := make(map[string]peparser.ExportFunction, 0)
 	for _, efunc := range pe.Export.Functions {
 		i := 0
 		for ; i < int(pe.Export.Struct.NumberOfNames); i++ {
@@ -335,6 +366,9 @@ func modExportFunc(srcFuncName string, dstFuncName string, srcfilename string, d
 		sortedFunctions[i] = efunc
 		if efunc.Name == srcFuncName {
 			srcFuncIndex = i
+			mapFunctions[dstFuncName] = efunc
+		} else {
+			mapFunctions[efunc.Name] = efunc
 		}
 	}
 
@@ -344,7 +378,8 @@ func modExportFunc(srcFuncName string, dstFuncName string, srcfilename string, d
 	}
 
 	// 更新函数对应的名字地址以及名字序号
-	for i, efunc := range sortedFunctions {
+	for i, nameByres := range nameArraySort {
+		efunc := mapFunctions[string(nameByres)]
 		nameRVA := nameOffsetMap[efunc.Name]
 		nameRVA = pe.Export.Struct.Name + nameRVA
 		WriteInteger[uint32](nameAddrTable, i*4, nameRVA)
@@ -368,7 +403,7 @@ func modExportFunc(srcFuncName string, dstFuncName string, srcfilename string, d
 	os.WriteFile(dstfilename, filebuf, 0644)
 }
 
-// 修改指定的导出函数
+// 修改指定的导出库文件名称
 func modExportName(dstExportName string, srcfilename string, dstfilename string) {
 	if dstExportName == "" {
 		return
